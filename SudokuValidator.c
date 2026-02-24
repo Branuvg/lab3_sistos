@@ -1,12 +1,17 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <fcntl.h>      // Para open()
-#include <sys/mman.h>   // Para mmap()
-#include <sys/stat.h>   // Para fstat()
-#include <unistd.h>     // Para close()
+#include <fcntl.h>          // Para open()
+#include <sys/mman.h>       // Para mmap()
+#include <sys/stat.h>       // Para fstat()
+#include <unistd.h>         // Para close(), fork(), getpid()
+#include <sys/wait.h>       // Para wait()
+#include <pthread.h>        // Para pthread_create(), pthread_join()
+#include <sys/syscall.h>    // Para syscall(SYS_gettid)
+
 
 int grid[9][9]; //grid de 9x9
 
+int colsValid = 0;
 
 int checkColumns() {
     // Recorremos cada una de las 9 columnas
@@ -67,8 +72,30 @@ int checkSubgrid(int startRow, int startCol) {
 }
 
 
+void runPS(pid_t parentPID) { // recibe el PID del proceso padre
+    // Convertir el PID a string para pasarlo como argumento a ps
+    char pidStr[20];
+    snprintf(pidStr, sizeof(pidStr), "%d", parentPID);
+    execlp("ps", "ps", "-p", pidStr, "-lLf", NULL);
+
+    // Si llegamos aqui, execlp() fallo
+    perror("Error en execlp");
+    exit(1);
+}
+
+
+void *columnThread(void *arg) { // Funcion que ejecutara el pthread para revisar columnas
+    // Obtener y mostrar el TID del thread actual a nivel de kernel
+    pid_t tid = syscall(SYS_gettid);
+    printf("[Thread de columnas] TID (kernel): %d\n", tid);
+    // Ejecutar la revision de columnas y guardar resultado en global
+    colsValid = checkColumns();
+    pthread_exit(0);
+}
+
+
 int main(int argc, char *argv[]) {
-   
+
     if (argc < 2) { // Verificar que se paso el nombre del archivo como argumento
         fprintf(stderr, "Uso: %s <archivo_sudoku>\n", argv[0]);
         return 1;
@@ -102,7 +129,7 @@ int main(int argc, char *argv[]) {
     }
     munmap(fileData, fileStat.st_size); // Liberar el mapeo de memoria
 
-    printf("Grilla del Sudoku\n"); // Imprimir la grilla (hmm)
+    printf("Grid del Sudoku\n"); // Imprimir la grid (hmm)
     for (int row = 0; row < 9; row++) {
         for (int col = 0; col < 9; col++) {
             printf("%d ", grid[row][col]);
@@ -121,21 +148,65 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // Verificar filas y columnas
-    int colsValid  = checkColumns();
-    int rowsValid  = checkRows();
+    //fase2
+    pid_t parentPID = getpid(); // Obtener el PID del proceso padre
+    printf("[Main]PID del proceso padre: %d\n", parentPID);
 
-    // Mostrar resultado final
-    printf("Resultado de la verificacion\n");
-    printf("Columnas : %s\n", colsValid    ? "VALIDAS"   : "INVALIDAS");
-    printf("Filas    : %s\n", rowsValid    ? "VALIDAS"   : "INVALIDAS");
-    printf("Subcuadros: %s\n", subgridsValid ? "VALIDOS" : "INVALIDOS");
 
-    if (colsValid && rowsValid && subgridsValid) {
-        printf("\nLa solucion del Sudoku es valida\n");
-    } else {
-        printf("\nLa solucion del Sudoku es invalida\n");
+    pid_t firstChild = fork(); // ejecutar ps durante revision de columnas
+    if (firstChild == -1) {
+        perror("Error en fork");
+        return 1;
     }
+    if (firstChild == 0) {
+         // proceso hijo del primer fork()
+        runPS(parentPID);
+        // runPS llama execlp() que reemplaza este proceso.
+    }
+    
+
+    // proceso padre continua aqui solamente
+    pthread_t columnTid; // Crear el thread para revisar las columnas
+    if (pthread_create(&columnTid, NULL, columnThread, NULL) != 0) {
+        perror("Error al crear pthread");
+        return 1;
+    }
+
+
+    pthread_join(columnTid, NULL); // pthread_join y desplegar TID del main
+    pid_t mainTid = syscall(SYS_gettid);
+    printf("[Main] TID del thread principal despues de join: %d\n", mainTid);
+
+
+    wait(NULL); // Esperar al hijo que ejecuto ps
+
+
+    int rowsValid = checkRows(); // Revisar las filas
+
+
+    printf("\nResultado de la verificacion\n"); // Desplegar el resultado de la verificacion
+    printf("Columnas  : %s\n", colsValid     ? "VALIDAS"   : "INVALIDAS");
+    printf("Filas     : %s\n", rowsValid     ? "VALIDAS"   : "INVALIDAS");
+    printf("Subcuadros: %s\n", subgridsValid ? "VALIDOS"   : "INVALIDOS");
+
+    if (colsValid && rowsValid && subgridsValid)
+        printf("\nLa solucion del Sudoku es VALIDA\n\n");
+    else
+        printf("\nLa solucion del Sudoku es INVALIDA\n\n");
+
+
+    pid_t secondChild = fork(); // Segundo fork() - ejecutar ps ANTES de terminar
+    if (secondChild == -1) {
+        perror("Error en segundo fork");
+        return 1;
+    }
+    if (secondChild == 0) {
+        // Proceso hijo del segundo fork() - igual que el primero
+        runPS(parentPID);
+    }
+
+    
+    wait(NULL); // Esperar al segundo hijo y retornar
 
     return 0;
 }
