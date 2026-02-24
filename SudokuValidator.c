@@ -132,9 +132,9 @@ int main(int argc, char *argv[]) {
     printf("Subcuadros: %s\n", subgridsValid ? "VALIDOS" : "INVALIDOS");
 
     if (colsValid && rowsValid && subgridsValid) {
-        printf("\n*** La solucion del Sudoku es VALIDA ***\n");
+        printf("\nLa solucion del Sudoku es valida\n");
     } else {
-        printf("\n*** La solucion del Sudoku es INVALIDA ***\n");
+        printf("\nLa solucion del Sudoku es invalida\n");
     }
 
     return 0;
